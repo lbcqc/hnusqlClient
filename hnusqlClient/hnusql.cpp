@@ -8,11 +8,17 @@ using namespace std;
 
 //返回更大的数
 #define MAX(a,b) {a>b? a:b}
-
+//去掉行首行尾的空格
+void trim(string &s);
 
 void helpInfo(void); //打印帮助信息
 void versionInfo(void); //打印版本信息
 void cntInfo(MYSQL hnusql); //打印连接成功的时的信息
+
+void default_func(MYSQL hnusql, const char* buffer); //缺省函数
+void use(MYSQL hnusql, const char* buffer); //选择数据库语句
+void quit(MYSQL hnusql, const char* buffer); //退出语句
+void select(MYSQL hnusql, const char* buffer); //查询语句
 
 //数据库时所用连接信息
 class HnusqlConnectInfo 
@@ -33,13 +39,18 @@ private:
 //参数类型信息
 enum ArgsType
 {
-	ARG,COMMAND
+	//命令行类型
+	ARG,COMMAND,
+	//sql语句类型
+	SIMPLE_CONMAND, //简单命令，比如use,quit等
+	CONMAND_TABLE_RESULT, //返回表结果的命令，比如select
+	CONMAND_INFO_RESULT,  //只有返回信息而不是表数据的命令，比如create database
 };
 
 
 
 //通过名称前缀索引地址列表
-class CntinfoList 
+class InfoList
 {
 public:
 	char *pre;
@@ -47,28 +58,27 @@ public:
 	ArgsType argsType;
 }cntinfoList[] = {
 	//参数列表-可接收的10中连接信息参数前缀
-	{ "-u", cntinfo.user, ARG },
-	{ "--user=", cntinfo.user, ARG },
-	{ "-p",cntinfo.password, ARG },
-	{ "--password=",cntinfo.password, ARG },
-	{ "-P",cntinfo.port, ARG },
-	{ "--port=",cntinfo.port, ARG },
-	{ "-D",cntinfo.database , ARG },
-	{ "--database=",cntinfo.database, ARG },
-	{ "-h",cntinfo.host, ARG },
-	{ "--host=",cntinfo.host, ARG },
+	{ "-u", cntinfo.user, ARG },{ "--user=", cntinfo.user, ARG },
+	{ "-p",cntinfo.password, ARG },{ "--password=",cntinfo.password, ARG },
+	{ "-P",cntinfo.port, ARG },{ "--port=",cntinfo.port, ARG },
+	{ "-D",cntinfo.database , ARG },{ "--database=",cntinfo.database, ARG },
+	{ "-h",cntinfo.host, ARG },{ "--host=",cntinfo.host, ARG },
 	
 	//参数列表-可接受的两种命令参数
-	{ "-V", &versionInfo, COMMAND },
-	{ "--version", &versionInfo, COMMAND },
-	{ "-?", &helpInfo, COMMAND },
-	{ "--help", &helpInfo, COMMAND },
+	{ "-V", &versionInfo, COMMAND },{ "--version", &versionInfo, COMMAND },
+	{ "-?", &helpInfo, COMMAND },{ "--help", &helpInfo, COMMAND },
+},sqlList[] = {
+	{"use", &default_func, SIMPLE_CONMAND }, //缺省函数，尚未提供处理
+	{"quit", &quit, SIMPLE_CONMAND },
+	{"select", NULL, CONMAND_TABLE_RESULT },
 };
 
 //读取命令行参数
 bool read_args(int argc, char* args[], HnusqlConnectInfo& cntinfo);
 //命令行匹配参数
 bool matchOption(const char* str);
+//sql语法匹配参数
+bool matchSqlOption(const char* str);
 //打印表数据
 void print_table_data(MYSQL_RES* result);
 
@@ -93,40 +103,89 @@ int main(int argc, char* args[])
 	if (!mysql_real_connect(&m_sqlCon, cntinfo.host, cntinfo.user,
 		cntinfo.password, cntinfo.database, atoi(cntinfo.port), NULL, 0))
 	{
-		cout << "HNUSQL Connect Error" << endl;
+		cout << "HNUSQL Connect Failed." << endl;
 		return 0;
 	}
 	else
 	{
-		//cout << "HNUSQL Connect Success" << endl;
-		cntInfo(m_sqlCon);
+		cntInfo(m_sqlCon); //连接成功后打印信息
 		mysql_query(&m_sqlCon, "set names 'gbk'"); //设置数据库字符格式，解决中文乱码问题
 	}
 	/*连接程序-end*/
 
 	/*读取命令并执行-begin*/
 	//此处读取sql语句并执行
-	MYSQL_RES* result;
-	
+
+	char default_prompt[20], prompt[20]; //提示字符格式
+	string buffer;
+	string tmpbuf;
+	char delimiter = ';';
+	strcpy(default_prompt, getenv("MYSQL_PS1") ? getenv("MYSQL_PS1") : "hnusql> ");
+
+
+	bool firstLine = true;
 	for (;;)
 	{
-		string buffer;
-		string tmpbuf;
-		getline(cin,buffer);
-		int status = mysql_query(&m_sqlCon, buffer.c_str());
-		if (status)
-		{
-			cout << "Could not execute statement(s)";
-			mysql_close(&m_sqlCon);
-			exit(0);
+		//打印提示符号
+		if (firstLine) {
+			strcpy(prompt, default_prompt);
+			buffer.clear();
 		}
-		else 
+		else
+			strcpy(prompt, "     -> ");
+		cout << prompt;
+
+		//获取数据
+		getline(cin, tmpbuf);
+		//去掉首尾的空格
+		trim(tmpbuf);
+		if (tmpbuf.empty()) continue;
+		buffer.append(tmpbuf);
+		buffer.append(" ");
+
+		for (auto sqllist : sqlList)
 		{
-			//MYSQL查询student表，将结果保存到SQLSERVER数据库中
-			
-			result = mysql_store_result(&m_sqlCon);
-			print_table_data(result);
+			//存在匹配
+			if (strstr(buffer.c_str(), sqllist.pre) == buffer.c_str())
+			{
+				if (firstLine && sqllist.addr != NULL && sqllist.argsType == SIMPLE_CONMAND)
+				{
+					if (buffer.find(delimiter) != -1)
+						buffer.erase(buffer.find(delimiter));
+					buffer.erase(buffer.find_last_not_of(" ") + 1);
+					(*((void(*)(MYSQL, const char*))sqllist.addr))(m_sqlCon, buffer.c_str());
+				}
+				else if (buffer.find(delimiter) != -1) { //存在结束标志;分号
+					buffer.erase(buffer.find(delimiter));
+					buffer.erase(buffer.find_last_not_of(" ") + 1);
+					MYSQL_RES* result;
+					if (sqllist.addr != NULL)
+					{
+						(*((void(*)(MYSQL, const char*))sqllist.addr))(m_sqlCon, buffer.c_str());
+					}
+					else {
+						int status = mysql_query(&m_sqlCon, buffer.c_str());
+						if (status)
+							cout << "Could not execute the statement(s)." << endl;
+						else if (sqllist.argsType == CONMAND_TABLE_RESULT)
+						{
+							//MYSQL查询student表，将结果保存到SQLSERVER数据库中
+							result = mysql_store_result(&m_sqlCon);
+							print_table_data(result);
+						}
+						else
+							cout << "ok." << endl;
+					}
+
+					firstLine = true;
+				}
+				else
+					firstLine = false;
+				break;
+			}
 		}
+		
+		
 	}
 	/*读取命令并执行-end*/
 	return 0;
@@ -235,6 +294,16 @@ bool matchOption(const char* str)
 	return false;
 }
 
+//sql语法匹配参数
+bool matchSqlOption(const char* str)
+{
+	for (auto sqllist : sqlList)
+	{
+		if (strstr(str, sqllist.pre) == str) return true;
+	}
+	return false;
+}
+
 
 //打印表数据
 void print_table_data(MYSQL_RES* result)
@@ -297,6 +366,48 @@ void print_table_data(MYSQL_RES* result)
 	return;
 }
 
+void trim(string &s)
+{
+
+	if (!s.empty())
+	{
+		s.erase(0, s.find_first_not_of(" "));
+		s.erase(s.find_last_not_of(" ") + 1);
+	}
+}
+
+void use(MYSQL hnusql, const char* buffer)
+{
+
+}
+void quit(MYSQL hnusql, const char *buffer)
+{
+	mysql_close(&hnusql);
+	cout << "Bye" << endl;
+	exit(0);
+}
+void select(MYSQL hnusql, const char* sql)
+{
+	MYSQL_RES* result;
+	int status = mysql_query(&hnusql, sql);
+	if (status)
+	{
+		cout << "Could not execute the statement(s)";
+	}
+	else
+	{
+		//MYSQL查询student表，将结果保存到SQLSERVER数据库中
+		result = mysql_store_result(&hnusql);
+		print_table_data(result);
+	}
+}
+//缺省函数
+void default_func(MYSQL hnusql, const char* buffer)
+{
+	cout << "Not supported the sql" << endl;
+}
+
+
 //打印帮助信息
 void helpInfo(void)
 {
@@ -325,6 +436,7 @@ void helpInfo(void)
 	cout << endl;
 	exit(0);
 }
+
 
 //打印版本信息
 void versionInfo(void)
