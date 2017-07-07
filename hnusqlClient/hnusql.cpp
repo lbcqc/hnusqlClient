@@ -6,22 +6,13 @@
 #include <iomanip>
 using namespace std;
 
+//返回更大的数
 #define MAX(a,b) {a>b? a:b}
 
-//打印帮助信息
-void helpInfo(void)
-{
-	cout << "========help info=======\n"
-		<< "NULL\n";
-	exit(0);
-}
 
-//打印版本信息
-void versionInfo(void)
-{
-	cout << "hnusql  Ver 14.14 Distrib 5.7.18, for Win32 (AMD64)" << endl;
-	exit(0);
-}
+void helpInfo(void); //打印帮助信息
+void versionInfo(void); //打印版本信息
+void cntInfo(MYSQL hnusql); //打印连接成功的时的信息
 
 //数据库时所用连接信息
 class HnusqlConnectInfo 
@@ -57,18 +48,20 @@ public:
 }cntinfoList[] = {
 	//参数列表-可接收的10中连接信息参数前缀
 	{ "-u", cntinfo.user, ARG },
-	{ "user", cntinfo.user, ARG },
+	{ "--user=", cntinfo.user, ARG },
 	{ "-p",cntinfo.password, ARG },
-	{ "password",cntinfo.password, ARG },
+	{ "--password=",cntinfo.password, ARG },
 	{ "-P",cntinfo.port, ARG },
-	{ "port",cntinfo.port, ARG },
+	{ "--port=",cntinfo.port, ARG },
 	{ "-D",cntinfo.database , ARG },
-	{ "--database",cntinfo.database, ARG },
+	{ "--database=",cntinfo.database, ARG },
 	{ "-h",cntinfo.host, ARG },
-	{ "host",cntinfo.host, ARG },
+	{ "--host=",cntinfo.host, ARG },
 	
 	//参数列表-可接受的两种命令参数
+	{ "-V", &versionInfo, COMMAND },
 	{ "--version", &versionInfo, COMMAND },
+	{ "-?", &helpInfo, COMMAND },
 	{ "--help", &helpInfo, COMMAND },
 };
 
@@ -105,8 +98,9 @@ int main(int argc, char* args[])
 	}
 	else
 	{
-		cout << "HNUSQL Connect Success" << endl;
-		mysql_query(&m_sqlCon, "set names 'gbk'"); //设置数据库字符格式，解决中文乱码问题  
+		//cout << "HNUSQL Connect Success" << endl;
+		cntInfo(m_sqlCon);
+		mysql_query(&m_sqlCon, "set names 'gbk'"); //设置数据库字符格式，解决中文乱码问题
 	}
 	/*连接程序-end*/
 
@@ -156,8 +150,9 @@ bool read_args(int argc, char* args[], HnusqlConnectInfo& cntinfo)
 		for (auto argsinfolist : cntinfoList)
 		{
 			if (strstr(tmpstr, argsinfolist.pre) == tmpstr) {
-				if (strcmp(argsinfolist.pre, "-p") == 0 || strcmp(argsinfolist.pre, "password") == 0)
+				if (strcmp(argsinfolist.pre, "-p") == 0 || strcmp(argsinfolist.pre, "--password=") == 0)
 					pswFlag = true; //选择中存在密码选项
+
 				if (argsinfolist.argsType == COMMAND) 
 				{
 					if (argsinfolist.addr != NULL) (*((void (*)())argsinfolist.addr))(); //执行函数指针
@@ -166,18 +161,29 @@ bool read_args(int argc, char* args[], HnusqlConnectInfo& cntinfo)
 				int len = strlen(argsinfolist.pre);
 				if (tmpstr[len] == '\0') 
 				{
-					if (i+1 < argc && !matchOption(args[i+1])) //如果下一个参数不是选项的话，则认为是该参数的内容
+					if (i + 1 < argc && !matchOption(args[i + 1])) //如果下一个参数不是选项的话，则认为是该参数的内容
+					{
+						if (strcmp(argsinfolist.pre, "-p") == 0 || strcmp(argsinfolist.pre, "--password=") == 0)
+							cout << "hnusql: [Warning] Using a password on the command line interface can be insecure." << endl;
 						strcpy((char*)argsinfolist.addr, args[++i]);
+						
+					}
 				}
 				else
+				{
+					if (strcmp(argsinfolist.pre, "-p") == 0 || strcmp(argsinfolist.pre, "--password=") == 0)
+						cout << "hnusql: [Warning] Using a password on the command line interface can be insecure." << endl;
 					strcpy((char*)argsinfolist.addr, tmpstr + len);
+				}
 				
 				errorFlag = false; //匹配成功-设置标志位
 				break;
 			}
 		}
-		if(errorFlag)
-			return false; //有某一个参数和列表中的信息均不匹配
+		if (errorFlag) {
+			cout << "hnusql: [ERROR] unknown option \'" << tmpstr << "\'" <<endl;
+			exit(1); //有某一个参数和列表中的信息均不匹配
+		}
 	}
 	//检测参数的合理性
 	if (cntinfo.user[0] == '\0')
@@ -289,4 +295,52 @@ void print_table_data(MYSQL_RES* result)
 	cout << endl;
 
 	return;
+}
+
+//打印帮助信息
+void helpInfo(void)
+{
+	cout << "hnusql  Ver 14.14 Distrib 5.7.18, for Win32 (AMD64)" << endl;
+	cout << endl;
+
+	cout << "Copyright(c) 2000, 2017, Hnu and/or its affiliates.All rights reserved." << endl;
+	cout << endl;
+
+	cout << "Usage: hnusql [OPTIONS] [database]" << endl;
+	cout << "  -?, --help          Display this help and exit." << endl;
+	cout << "  -D, --database=name Database to use." << endl;
+	cout << "  -h, --host = name     Connect to host." << endl;
+	cout << "  -p, --password[=name]" << endl;
+	cout << "                      Password to use when connecting to server. If password is" << endl;
+	cout << "                      not given it's asked from the tty." << endl;
+	cout << "  -P, --port=#        Port number to use for connection or 0 for default to, in" << endl;
+	cout << "                      order of preference, my.cnf, $MYSQL_TCP_PORT, " << endl;
+	cout << "                      /etc/services, built-in default (3306)." << endl;
+	cout << "  -u, --user=name     User for login if not current user." << endl;
+	cout << "  -V, --version       Output version information and exit." << endl;
+	cout << endl;
+	
+	cout << "SQL syntax supported." << endl;
+	cout << "  select" << endl;
+	cout << endl;
+	exit(0);
+}
+
+//打印版本信息
+void versionInfo(void)
+{
+	cout << "hnusql  Ver 14.14 Distrib 5.7.18, for Win32 (AMD64)" << endl;
+	exit(0);
+}
+
+//打印连接成功时的信息
+void cntInfo(MYSQL hnusql)
+{
+	cout << "Welcome to the HnuSQL monitor.  Commands end with \';\'." << endl;
+	cout << "Your HnuSQL connection id is " << mysql_thread_id(&hnusql)  << "."<< endl;
+	cout << "Server version : "<< hnusql.server_version << "." << endl;
+	cout << endl;
+	cout << "Copyright(c) 2000, 2017, Hnu and/or its affiliates.All rights reserved." << endl;
+	cout << endl;
+	cout << "Type 'help;' or '\\h' for help.Type '\\c' to clear the current input statement.\n" << endl;
 }
